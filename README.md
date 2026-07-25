@@ -18,6 +18,8 @@
 </p>
 
 ---
+<img width="1366" height="607" alt="image" src="https://github.com/user-attachments/assets/6a32f3b9-8120-44cc-9554-ee205af125e7" />
+
 
 AI agents are producing more work than teams can manage — research, specifications, code, architecture decisions, evaluations, generated skills. Today that work is scattered across chat windows, hidden agent folders, and Docker volumes with no history, no review, and no reliable way to tell what's current.
 
@@ -43,8 +45,6 @@ Existing systems store AI-generated work as documents, files, chat logs, or repo
 - Generated code or draft proposals pile up in hidden folders no human ever reviews.
 
 We call the infrastructure that solves this an **Artifact Plane**. It does for AI-generated work what Git did for source code: gives every artifact a stable identity so it can be versioned, related, reviewed, and reused.
-
-<img width="1366" height="604" alt="image" src="https://github.com/user-attachments/assets/facbfa5d-bec5-4ace-9eee-9895575e06b8" />
 
 
 ## How It Fits Together
