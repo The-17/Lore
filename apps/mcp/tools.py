@@ -150,14 +150,19 @@ def mcp_write_artifact(
         lifecycle_state="draft",
     )
 
-    if type == "skill":
+    if type == "document":
+        DocumentArtifact.objects.create(
+            artifact=artifact,
+            file=ContentFile(content.encode("utf-8"), name=f"{title}.md"),
+        )
+    elif type == "skill":
         SkillArtifact.objects.create(artifact=artifact, skill_md_content=content)
     elif type == "decision":
         DecisionArtifact.objects.create(artifact=artifact, decision_text=content)
     elif type == "memory":
         MemoryArtifact.objects.create(artifact=artifact, content=content)
 
-    from apps.artifacts.services import create_initial_version, update_artifact_version, revert_artifact_to_version
+    from apps.artifacts.services import create_initial_version
     create_initial_version(artifact, content, principal)
 
     return {
@@ -166,6 +171,7 @@ def mcp_write_artifact(
         "status": "created",
         "version_number": 1,
     }
+
 
 
 def mcp_revert_artifact(request, artifact_id: str, target_version_number: int, commit_message: str = "") -> dict[str, Any]:
@@ -255,3 +261,94 @@ def mcp_list_skills(request) -> list[dict[str, Any]]:
             "collection_id": str(art.collection_id) if art.collection_id else None,
         })
     return skills
+
+
+def mcp_create_collection(request, name: str, parent_id: Optional[str] = None) -> dict[str, Any]:
+    """Create a new collection for organizing artifacts."""
+    principal = getattr(request.user, "principal", None)
+    if not principal:
+        return {"error": "No principal identity found."}
+
+    parent = None
+    if parent_id:
+        col_qs = Collection.objects.all()
+        col_qs = scope_collections_queryset(col_qs, request)
+        try:
+            parent = col_qs.get(id=parent_id)
+        except Collection.DoesNotExist:
+            return {"error": f"Parent collection {parent_id} not found."}
+
+    collection = Collection.objects.create(
+        name=name,
+        owner=principal,
+        parent=parent,
+    )
+    return {
+        "id": str(collection.id),
+        "name": collection.name,
+        "parent_id": str(collection.parent_id) if collection.parent_id else None,
+        "status": "created",
+    }
+
+
+def mcp_delete_artifact(request, artifact_id: str) -> dict[str, Any]:
+    """Soft-delete an artifact by setting deleted_at timestamp."""
+    from django.utils import timezone
+
+    qs = Artifact.objects.filter(deleted_at__isnull=True)
+    qs = scope_artifacts_queryset(qs, request)
+
+    try:
+        art = qs.get(id=artifact_id)
+    except Artifact.DoesNotExist:
+        return {"error": f"Artifact {artifact_id} not found or access denied."}
+
+    principal = getattr(request.user, "principal", None)
+    if art.locked_by and art.locked_by != principal:
+        return {"error": f"Artifact is locked by {art.locked_by}."}
+
+    art.deleted_at = timezone.now()
+    art.lifecycle_state = "deleted"
+    art.save(update_fields=["deleted_at", "lifecycle_state", "updated_at"])
+
+    return {"status": "deleted", "artifact_id": str(art.id)}
+
+
+def mcp_get_related_artifacts(request, artifact_id: str) -> dict[str, Any]:
+    """Retrieve incoming and outgoing graph relationships for an artifact."""
+    qs = Artifact.objects.filter(deleted_at__isnull=True)
+    qs = scope_artifacts_queryset(qs, request)
+
+    try:
+        art = qs.get(id=artifact_id)
+    except Artifact.DoesNotExist:
+        return {"error": f"Artifact {artifact_id} not found or access denied."}
+
+    outgoing = art.outgoing_relationships.select_related("to_artifact").all()
+    incoming = art.incoming_relationships.select_related("from_artifact").all()
+
+    return {
+        "artifact_id": str(art.id),
+        "title": art.title,
+        "outgoing": [
+            {
+                "relationship_id": str(r.id),
+                "relation_type": r.relation_type,
+                "target_id": str(r.to_artifact.id),
+                "target_title": r.to_artifact.title,
+                "target_type": r.to_artifact.type,
+            }
+            for r in outgoing
+        ],
+        "incoming": [
+            {
+                "relationship_id": str(r.id),
+                "relation_type": r.relation_type,
+                "source_id": str(r.from_artifact.id),
+                "source_title": r.from_artifact.title,
+                "source_type": r.from_artifact.type,
+            }
+            for r in incoming
+        ],
+    }
+

@@ -2,7 +2,10 @@ from typing import Any, Dict, Optional
 from ninja import Router, Schema
 
 from apps.mcp.tools import (
+    mcp_create_collection,
     mcp_create_relationship,
+    mcp_delete_artifact,
+    mcp_get_related_artifacts,
     mcp_list_collection,
     mcp_list_skills,
     mcp_read_artifact,
@@ -58,6 +61,15 @@ MCP_TOOLS_SPEC = [
         },
     },
     {
+        "name": "delete_artifact",
+        "description": "Soft-delete an artifact by setting deleted_at timestamp.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string"}},
+            "required": ["artifact_id"],
+        },
+    },
+    {
         "name": "revert_artifact",
         "description": "Revert an artifact to a previous version number, recording an append-only version snapshot.",
         "inputSchema": {
@@ -79,6 +91,18 @@ MCP_TOOLS_SPEC = [
         },
     },
     {
+        "name": "create_collection",
+        "description": "Create a new collection for organizing artifacts.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "parent_id": {"type": "string"},
+            },
+            "required": ["name"],
+        },
+    },
+    {
         "name": "create_relationship",
         "description": "Create a typed graph edge between two artifacts (e.g. references, derived_from, depends_on).",
         "inputSchema": {
@@ -89,6 +113,15 @@ MCP_TOOLS_SPEC = [
                 "relation_type": {"type": "string"},
             },
             "required": ["from_artifact_id", "to_artifact_id", "relation_type"],
+        },
+    },
+    {
+        "name": "get_related_artifacts",
+        "description": "Retrieve incoming and outgoing graph relationships for an artifact.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string"}},
+            "required": ["artifact_id"],
         },
     },
     {
@@ -132,12 +165,18 @@ def handle_mcp_jsonrpc(request, payload: MCPPayloadSchema):
                 result = mcp_read_artifact(request, **arguments)
             elif name == "write_artifact":
                 result = mcp_write_artifact(request, **arguments)
+            elif name == "delete_artifact":
+                result = mcp_delete_artifact(request, **arguments)
             elif name == "revert_artifact":
                 result = mcp_revert_artifact(request, **arguments)
             elif name == "list_collection":
                 result = mcp_list_collection(request, **arguments)
+            elif name == "create_collection":
+                result = mcp_create_collection(request, **arguments)
             elif name == "create_relationship":
                 result = mcp_create_relationship(request, **arguments)
+            elif name == "get_related_artifacts":
+                result = mcp_get_related_artifacts(request, **arguments)
             elif name == "list_skills":
                 result = mcp_list_skills(request)
             else:
@@ -164,3 +203,4 @@ def handle_mcp_jsonrpc(request, payload: MCPPayloadSchema):
         "id": rpc_id,
         "error": {"code": -32601, "message": f"Method not supported: {method}"},
     }
+

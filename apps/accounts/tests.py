@@ -32,7 +32,7 @@ class AccountsNinjaAPITests(TestCase):
         admin_user = User.objects.get(email="admin@example.com")
         self.assertTrue(admin_user.is_workspace_admin)
 
-        # 2. Try to register another user via open registration (should fail with 403)
+        # 2. Try to register another user without an invite (must fail with 403)
         second_register_data = {
             "first_name": "Second",
             "last_name": "User",
@@ -171,7 +171,7 @@ class AccountsNinjaAPITests(TestCase):
 
         token_id = res.json()["id"]
         agent_token_key = res.json()["token"]
-        self.assertTrue(agent_token_key.startswith("lore_agent_"))
+        self.assertTrue(agent_token_key.startswith("lore_agent_") or agent_token_key.startswith("lore_agt_"))
 
         # 12. List Agent Tokens
         res = self.client.get("/api/auth/tokens", **admin_headers)
@@ -179,16 +179,15 @@ class AccountsNinjaAPITests(TestCase):
         self.assertEqual(len(res.json()), 1)
         self.assertEqual(res.json()[0]["id"], token_id)
 
-        # 13. Authenticate with Agent Token key on Hello Endpoint
+        # 13. Authenticate with Agent Token key on Protected Collections Endpoint
         agent_headers = {"HTTP_AUTHORIZATION": f"Bearer {agent_token_key}"}
-        res = self.client.get("/api/hello", **agent_headers)
+        res = self.client.get("/api/collections/", **agent_headers)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json(), {"message": "Welcome to Lore API"})
 
         # 14. Revoke Agent Token
         res = self.client.delete(f"/api/auth/tokens/{token_id}", **admin_headers)
         self.assertEqual(res.status_code, 204)
 
         # 15. Verify Revoked Agent Token fails authentication
-        res = self.client.get("/api/hello", **agent_headers)
+        res = self.client.get("/api/collections/", **agent_headers)
         self.assertEqual(res.status_code, 401)

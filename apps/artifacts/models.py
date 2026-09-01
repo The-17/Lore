@@ -381,3 +381,39 @@ class ArtifactChunk(models.Model):
 
     def __str__(self):
         return f"Chunk {self.chunk_index} of {self.artifact.title}"
+
+
+class ArtifactDraft(BaseModel):
+    """
+    Mutable working draft for an artifact.
+
+    The single source of truth during editing is ``block_data`` — a JSON
+    array of ADM Block objects.  Markdown is generated from block_data
+    only at commit time.
+
+    A draft belongs to the artifact, not to a person.  Multiple humans
+    and agents can contribute to the same draft simultaneously.
+    """
+
+    artifact = models.OneToOneField(
+        Artifact, on_delete=models.CASCADE, related_name="draft",
+    )
+    block_data = models.JSONField(
+        default=list,
+        help_text="ADM Block[] — the canonical document during editing.",
+    )
+    participants = models.ManyToManyField(
+        Principal, blank=True, related_name="draft_participations",
+        help_text="Principals who have contributed edits to this draft.",
+    )
+    last_edited_by = models.ForeignKey(
+        Principal, on_delete=models.SET_NULL, null=True,
+        related_name="last_edited_drafts",
+    )
+    commit_msg_hint = models.CharField(max_length=255, blank=True)
+
+    class Meta:
+        ordering = ["-updated_at"]
+
+    def __str__(self):
+        return f"Draft of {self.artifact.title}"
