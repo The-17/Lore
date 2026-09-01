@@ -117,6 +117,32 @@ class ArtifactSelector:
         }
 
     @staticmethod
+    def get_version_diff(*, request, artifact_id: UUID, from_version: int, to_version: int) -> dict:
+        from .utils import compute_diff
+        artifact = ArtifactSelector.get_by_id_for_request(request=request, artifact_id=artifact_id)
+        v_from = artifact.versions.filter(version_number=from_version).first()
+        v_to = artifact.versions.filter(version_number=to_version).first()
+        if not v_from or not v_to:
+            raise HttpError(404, "One or both specified versions were not found.")
+
+        from_bytes = b""
+        to_bytes = b""
+        if v_from.file_instance:
+            v_from.file_instance.seek(0)
+            from_bytes = v_from.file_instance.read()
+        if v_to.file_instance:
+            v_to.file_instance.seek(0)
+            to_bytes = v_to.file_instance.read()
+
+        patch = compute_diff(from_bytes, to_bytes)
+        return {
+            "artifact_id": str(artifact.id),
+            "from_version": from_version,
+            "to_version": to_version,
+            "diff": patch,
+        }
+
+    @staticmethod
     def list_versions(*, request, artifact_id: UUID) -> QuerySet[ArtifactVersion]:
         artifact = ArtifactSelector.get_by_id_for_request(request=request, artifact_id=artifact_id)
         return artifact.versions.select_related("created_by").order_by("-version_number")

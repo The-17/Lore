@@ -219,6 +219,14 @@ def get_artifact_delta(request, artifact_id: UUID, since_version: int = 1):
     )
 
 
+@router.get("/{artifact_id}/diff", response={200: dict, 404: dict})
+def get_version_diff(request, artifact_id: UUID, from_version: int = 1, to_version: int = 2):
+    """Retrieve text diff patch between any two historical versions."""
+    return 200, ArtifactSelector.get_version_diff(
+        request=request, artifact_id=artifact_id, from_version=from_version, to_version=to_version
+    )
+
+
 @router.post("/{artifact_id}/revert", response={201: ArtifactResponseSchema, 400: dict, 403: dict, 404: dict})
 def revert_artifact(request, artifact_id: UUID, target_version_number: int, commit_message: str = ""):
     """Revert an artifact to a historical version snapshot."""

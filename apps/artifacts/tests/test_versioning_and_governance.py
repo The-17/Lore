@@ -107,3 +107,30 @@ class VersioningAndGovernanceTestCase(TestCase):
         trusted_req = MagicMock(user=self.user1, agent_token=trusted_token)
         self.assertEqual(_initial_lifecycle_state("approved", trusted_req), LifecycleState.APPROVED)
         self.assertEqual(_initial_lifecycle_state("published", trusted_req), LifecycleState.PUBLISHED)
+
+    def test_version_diff_endpoint(self):
+        from django.test import Client
+        client = Client()
+        tokens = self.user1.tokens()
+        headers = {"HTTP_AUTHORIZATION": f"Bearer {tokens['access']}"}
+
+        artifact = Artifact.objects.create(
+            type="skill",
+            title="Diff Test Skill",
+            owner=self.principal1,
+            created_by=self.principal1,
+            inherit_permissions=False,
+            lifecycle_state=LifecycleState.DRAFT,
+        )
+        SkillArtifact.objects.create(artifact=artifact, skill_md_content="line 1\nline 2\n")
+        create_initial_version(artifact, "line 1\nline 2\n", self.principal1)
+
+        update_artifact_version(artifact, "line 1\nline 2 modified\nline 3\n", self.principal1, commit_message="v2")
+
+        res = client.get(f"/api/artifacts/{artifact.id}/diff?from_version=1&to_version=2", **headers)
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["from_version"], 1)
+        self.assertEqual(data["to_version"], 2)
+        self.assertIn("+line 2 modified", data["diff"])
+        self.assertIn("+line 3", data["diff"])
