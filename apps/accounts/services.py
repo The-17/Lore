@@ -14,13 +14,11 @@ INVITE_EXPIRY_DAYS = 7
 
 
 class AuthService:
-    """Atomic service for user registration and authentication."""
+    """User registration and authentication service."""
 
     @staticmethod
     def register_workspace_admin(*, email: str, first_name: str, last_name: str, password: str) -> tuple[User, dict[str, str]]:
-        """
-        Initializes the workspace with the first human user as workspace admin.
-        """
+        """Register the first human user as workspace admin."""
         with transaction.atomic():
             if UserSelector.exists():
                 raise HttpError(403, "This workspace is invite-only. Contact your workspace admin for an invite link.")
@@ -54,7 +52,7 @@ class AuthService:
 
 
 class InviteService:
-    """Atomic service for invite lifecycle management."""
+    """Workspace invite operations."""
 
     @staticmethod
     def create_invite(*, email: str, name: str, creator_user: User) -> Invite:
@@ -126,7 +124,7 @@ class InviteService:
 
 
 class AgentTokenService:
-    """Atomic service for AgentToken provisioning and revocation."""
+    """Agent token provisioning and revocation service."""
 
     @staticmethod
     def create_token(

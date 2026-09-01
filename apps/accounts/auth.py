@@ -35,28 +35,20 @@ class SecurityPrincipal:
 
 class LoreAuth(HttpBearer):
     """
-    Production-grade dual-path Bearer authentication guard.
+    Bearer authentication guard.
 
-    1. Agent Token Path (lore_agt_... / lore_agent_...):
-       - Looked up via indexed lookup_id in O(1) time.
-       - Verified using constant-time HMAC comparison (hmac.compare_digest).
-       - Enforces permission scopes ('read_only' blocks mutations).
-
-    2. Human JWT Session Path (Zero-DB Ingress):
-       - Cryptographically verifies token in memory (< 0.5ms).
-       - Extracts user_id, principal_id, and roles directly from claims.
-       - Attaches SecurityPrincipal and LazyUser to request context.
+    - Tokens starting with 'lore_agt_' or 'lore_agent_' authenticate as AgentToken
+      via indexed lookup and constant-time HMAC hash comparison.
+    - Other tokens authenticate as human user JWT access tokens.
     """
 
     def authenticate(self, request, token: str) -> Any | None:
         if not token:
             return None
 
-        # --- Path A: Prefixed Agent API Keys ---
         if token.startswith("lore_agt_") or token.startswith("lore_agent_"):
             return self._authenticate_agent(request, token)
 
-        # --- Path B: Human JWT Session (Zero-DB Ingress) ---
         return self._authenticate_jwt(request, token)
 
     def _authenticate_agent(self, request, token: str) -> User | None:
@@ -104,7 +96,6 @@ class LoreAuth(HttpBearer):
 
     def _authenticate_jwt(self, request, token: str) -> Any | None:
         try:
-            # 1. Cryptographic in-memory token verification (< 0.5ms)
             access_token = AccessToken(token)
             payload = access_token.payload
 
@@ -119,7 +110,6 @@ class LoreAuth(HttpBearer):
             is_admin = bool(payload.get("is_workspace_admin", False))
             roles = tuple(payload.get("roles", ["admin" if is_admin else "member"]))
 
-            # 2. Build in-memory SecurityPrincipal (Zero DB queries!)
             sec_principal = SecurityPrincipal(
                 id=principal_id,
                 kind="user",

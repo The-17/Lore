@@ -103,12 +103,8 @@ class Principal(models.Model):
 
 class AgentToken(models.Model):
     """
-    Scoped high-entropy API key for AI agent and MCP access.
-
+    Scoped API key for AI agent and MCP tool access.
     Format: ``lore_agt_<lookup_id>_<secret_entropy>``.
-    The 8-character lookup_id provides indexed O(1) row retrieval.
-    Only the SHA-256 hash is persisted; verification uses constant-time
-    HMAC comparisons to prevent side-channel timing attacks.
     """
 
     id = models.UUIDField(default=uuid.uuid4, unique=True, primary_key=True)
@@ -139,9 +135,8 @@ class AgentToken(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def verify_secret(self, raw_token_or_secret: str) -> bool:
-        """Constant-time hash comparison to prevent timing side-channel attacks."""
+        """Constant-time token hash verification."""
         import hmac
-        # If full token passed, hash the entire token (for backwards compatibility) or secret part
         computed_hash = hashlib.sha256(raw_token_or_secret.encode("utf-8")).hexdigest()
         return hmac.compare_digest(self.token_hash, computed_hash)
 

@@ -31,10 +31,7 @@ router = Router(tags=["Authentication"])
 
 @router.post("/register", response={201: dict, 400: dict, 403: dict})
 def register(request, data: RegisterSchema):
-    """
-    Register the workspace admin.
-    Thin controller: delegates atomic workspace provisioning to AuthService.
-    """
+    """Register the workspace admin on initial setup."""
     user, tokens = AuthService.register_workspace_admin(
         email=data.email,
         first_name=data.first_name,
@@ -60,10 +57,7 @@ def register(request, data: RegisterSchema):
 
 @router.post("/login", response={200: dict, 401: dict})
 def login(request, data: LoginSchema):
-    """
-    Authenticate a human user and return dual JWT access/refresh token pair.
-    Thin controller: delegates authentication to AuthService.
-    """
+    """Authenticate user credentials and return JWT token pair."""
     user, tokens = AuthService.authenticate_user(email=data.email, password=data.password)
     return 200, {
         "status": "success",
@@ -174,7 +168,7 @@ def claim_invite(request, token: str, data: InviteClaimSchema):
 
 @router.post("/tokens", auth=lore_auth, response={201: AgentTokenCreateResponseSchema})
 def create_agent_token(request, data: AgentTokenCreateSchema):
-    """Provision high-entropy prefixed AgentToken for AI agent workloads."""
+    """Provision a new AgentToken API key."""
     token_obj, raw_token = AgentTokenService.create_token(
         user=request.user,
         description=data.description,
