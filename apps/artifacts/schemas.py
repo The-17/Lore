@@ -1,6 +1,6 @@
 from datetime import datetime
 from uuid import UUID
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, List, Optional
 
 
@@ -49,6 +49,8 @@ class ArtifactResponseSchema(BaseModel):
     lifecycle_state: str
     embedding_status: str
     locked_by_id: Optional[UUID] = None
+    has_draft: bool = False
+    draft_updated_at: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
     
@@ -87,6 +89,13 @@ class ArtifactResponseSchema(BaseModel):
                 "expires_at": artifact_obj.memory.expires_at.isoformat() if artifact_obj.memory.expires_at else None,
             }
 
+        # Check draft presence
+        has_draft = False
+        draft_updated_at = None
+        if hasattr(artifact_obj, "draft") and artifact_obj.draft:
+            has_draft = True
+            draft_updated_at = artifact_obj.draft.updated_at
+
         return cls(
             id=artifact_obj.id,
             type=artifact_obj.type,
@@ -99,6 +108,8 @@ class ArtifactResponseSchema(BaseModel):
             lifecycle_state=artifact_obj.lifecycle_state,
             embedding_status=artifact_obj.embedding_status,
             locked_by_id=artifact_obj.locked_by_id,
+            has_draft=has_draft,
+            draft_updated_at=draft_updated_at,
             created_at=artifact_obj.created_at,
             updated_at=artifact_obj.updated_at,
             details=details,
@@ -189,4 +200,52 @@ class CommentResponseSchema(BaseModel):
             author_display_name=str(comment_obj.author),
             body=comment_obj.body,
             created_at=comment_obj.created_at,
+        )
+
+
+# --- Draft Schemas ---
+
+class DraftOperationSchema(BaseModel):
+    """A single mutation operation on an artifact working draft."""
+    op: str  # replace_block, insert_block, delete_block, move_block, replace_text
+    block_id: Optional[str] = None
+    block_type: Optional[str] = None
+    content: Any = None
+    attrs: Optional[dict] = None
+    position_index: Optional[int] = None
+    after_block_id: Optional[str] = None
+
+
+class DraftPatchSchema(BaseModel):
+    operations: List[DraftOperationSchema]
+
+
+class ArtifactCommitSchema(BaseModel):
+    commit_message: str = ""
+
+
+class ArtifactDraftResponseSchema(BaseModel):
+    id: UUID
+    artifact_id: UUID
+    block_data: Any
+    updated_at: datetime
+    last_edited_by_id: Optional[UUID] = None
+    last_edited_by_display_name: Optional[str] = None
+    participant_names: List[str] = Field(default_factory=list)
+    commit_msg_hint: str = ""
+
+    class Config:
+        from_attributes = True
+
+    @classmethod
+    def from_model(cls, draft_obj):
+        return cls(
+            id=draft_obj.id,
+            artifact_id=draft_obj.artifact_id,
+            block_data=draft_obj.block_data,
+            updated_at=draft_obj.updated_at,
+            last_edited_by_id=draft_obj.last_edited_by_id,
+            last_edited_by_display_name=str(draft_obj.last_edited_by) if draft_obj.last_edited_by else None,
+            participant_names=[str(p) for p in draft_obj.participants.all()],
+            commit_msg_hint=draft_obj.commit_msg_hint,
         )

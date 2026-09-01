@@ -40,6 +40,16 @@ INSTALLED_APPS = DJANGO_APPS + THIRD_PARTY_APPS + LOCAL_APPS
 
 AUTH_USER_MODEL = "accounts.user"
 
+# Deployment & Registration Modes
+# 'self_hosted': Single-tenant / BYOB mode. First user is workspace admin; others use invites.
+# 'cloud': Multi-tenant hosted mode. Open registration.
+LORE_HOSTING_MODE = config("LORE_HOSTING_MODE", default="self_hosted")
+ALLOW_OPEN_REGISTRATION = config(
+    "ALLOW_OPEN_REGISTRATION",
+    default=(LORE_HOSTING_MODE == "cloud"),
+    cast=bool,
+)
+
 # CORS Configuration for BYOB (Bring Your Own Backend)
 LORE_FRONTEND_URLS = config(
     "LORE_FRONTEND_URL",

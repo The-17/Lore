@@ -38,6 +38,6 @@ api.add_router("/artifacts", artifacts_router, auth=lore_auth)
 api.add_router("/mcp", mcp_router, auth=lore_auth)
 
 
-@api.get("/hello")
+@api.get("/hello", auth=lore_auth)
 def hello(request):
     return {"message": "Welcome to Lore API"}

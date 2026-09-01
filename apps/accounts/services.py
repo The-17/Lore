@@ -17,30 +17,55 @@ class AuthService:
     """User registration and authentication service."""
 
     @staticmethod
-    def register_workspace_admin(*, email: str, first_name: str, last_name: str, password: str) -> tuple[User, dict[str, str]]:
-        """Register the first human user as workspace admin."""
-        with transaction.atomic():
-            if UserSelector.exists():
-                raise HttpError(403, "This workspace is invite-only. Contact your workspace admin for an invite link.")
+    def register_user(
+        *,
+        email: str,
+        first_name: str,
+        last_name: str,
+        password: str,
+    ) -> tuple[User, dict[str, str]]:
+        """
+        Register a new user account.
+        - In self_hosted mode: First user becomes workspace admin; subsequent users require invites.
+        - In cloud / open mode: Direct registration is permitted.
+        """
+        from django.conf import settings
 
+        with transaction.atomic():
             if UserSelector.get_by_email(email=email):
                 raise HttpError(400, "User with this email already exists.")
+
+            has_users = UserSelector.exists()
+            allow_open = getattr(settings, "ALLOW_OPEN_REGISTRATION", False)
+
+            if has_users and not allow_open:
+                raise HttpError(
+                    403,
+                    "This workspace is invite-only. Contact your workspace admin for an invite link.",
+                )
+
+            is_first_user = not has_users
+            is_admin = is_first_user
 
             user = User.objects.create_user(
                 email=email,
                 first_name=first_name,
                 last_name=last_name,
                 password=password,
-                is_workspace_admin=True,
+                is_workspace_admin=is_admin,
             )
-            # Create Principal for user
+
             Principal.objects.create(
                 kind=Principal.Kind.USER,
                 display_name=user.full_name,
                 user=user,
             )
+
             tokens = user.tokens()
             return user, tokens
+
+    # Alias for explicit calls
+    register_workspace_admin = register_user
 
     @staticmethod
     def authenticate_user(*, email: str, password: str) -> tuple[User, dict[str, str]]:
