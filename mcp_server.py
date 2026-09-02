@@ -1,402 +1,218 @@
 import argparse
-import asyncio
-import hashlib
 import os
 import sys
-from uuid import UUID
+from types import SimpleNamespace
+from typing import Any, Optional
 
 # Setup Django environment before importing models
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "lore.settings.base")
-import django
 
+import django  # noqa: E402
 django.setup()
 
-import mcp.types as types  # noqa: E402
-from asgiref.sync import sync_to_async  # noqa: E402
-from django.utils import timezone  # noqa: E402
-from mcp.server.lowlevel import Server  # noqa: E402
+from fastmcp import FastMCP  # noqa: E402
+from apps.accounts.models import AgentToken, Principal, User  # noqa: E402
+from apps.mcp.tools import (  # noqa: E402
+    mcp_commit_artifact_version,
+    mcp_create_collection,
+    mcp_create_relationship,
+    mcp_delete_artifact,
+    mcp_get_related_artifacts,
+    mcp_list_collection,
+    mcp_list_skills,
+    mcp_read_artifact,
+    mcp_revert_artifact,
+    mcp_search_artifacts,
+    mcp_search_artifacts_semantic,
+    mcp_update_artifact_draft,
+    mcp_write_artifact,
+)
 
-from apps.accounts.models import AgentToken  # noqa: E402
-from apps.files.models import File as FileModel  # noqa: E402
-from apps.files.models import FileVersion  # noqa: E402
-from apps.files.utils import compute_diff  # noqa: E402
-from apps.folders.models import Folder  # noqa: E402
+mcp = FastMCP(
+    name="Lore Artifact Plane",
+    instructions="Native Model Context Protocol (MCP) interface for the Lore Artifact Plane.",
+)
 
-# --- Helper Database Operations ---
-
-def authenticate_token(token_str: str) -> AgentToken | None:
-    if not token_str or not token_str.startswith("lore_agent_"):
-        return None
-    token_hash = hashlib.sha256(token_str.encode()).hexdigest()
-    try:
-        agent_token = AgentToken.objects.select_related("user", "restricted_folder").get(
-            token_hash=token_hash
-        )
-        if agent_token.expires_at and agent_token.expires_at < timezone.now():
-            return None
-        return agent_token
-    except AgentToken.DoesNotExist:
-        return None
+_global_token_str: Optional[str] = None
 
 
-def execute_list_directory(agent_token: AgentToken, folder_id: str | None = None) -> str:
-    user = agent_token.user
+def get_authenticated_request_context(token_str: Optional[str] = None) -> SimpleNamespace:
+    """
+    Constructs an authenticated request-like context for MCP tool execution.
+    Authenticates against AgentToken or falls back to workspace admin principal.
+    """
+    active_token = token_str or _global_token_str or os.environ.get("LORE_AGENT_TOKEN")
+    agent_token = None
 
-    if agent_token.restricted_folder:
-        allowed_folders = agent_token.restricted_folder.get_descendants(include_self=True)
-        allowed_ids = [f.id for f in allowed_folders]
-
-        if folder_id:
-            try:
-                target_uuid = UUID(folder_id)
-            except ValueError:
-                return "Error: Invalid folder UUID format."
-            if target_uuid not in allowed_ids:
-                return "Error: Access denied. Folder is outside sandboxed scope."
-            target_folder = Folder.objects.get(id=target_uuid)
-        else:
-            target_folder = agent_token.restricted_folder
-    else:
-        if folder_id:
-            try:
-                target_uuid = UUID(folder_id)
-            except ValueError:
-                return "Error: Invalid folder UUID format."
-            try:
-                target_folder = Folder.objects.get(id=target_uuid, owner=user)
-            except Folder.DoesNotExist:
-                return "Error: Folder not found or access denied."
-        else:
-            target_folder = None
-
-    subfolders = Folder.objects.filter(folder=target_folder, owner=user)
-    files = FileModel.objects.filter(folder=target_folder, owner=user)
-
-    output = [f"Directory contents for: {target_folder.name if target_folder else '/'}", "Subdirectories:"]
-    for sf in subfolders:
-        output.append(f" - [Folder] name: {sf.name}, id: {sf.id}")
-    if not subfolders.exists():
-        output.append(" (None)")
-
-    output.append("Files:")
-    for f in files:
-        lock_status = f" (Locked by {f.locked_by.email})" if f.locked_by else ""
-        output.append(f" - [File] name: {f.name}, id: {f.id}{lock_status}")
-    if not files.exists():
-        output.append(" (None)")
-
-    return "\n".join(output)
-
-
-def execute_read_document(agent_token: AgentToken, file_id: str) -> str:
-    user = agent_token.user
-    try:
-        file_uuid = UUID(file_id)
-    except ValueError:
-        return "Error: Invalid file UUID format."
-
-    try:
-        file_obj = FileModel.objects.select_related("folder").get(id=file_uuid, owner=user)
-    except FileModel.DoesNotExist:
-        return "Error: File not found or access denied."
-
-    if agent_token.restricted_folder:
-        allowed_folders = agent_token.restricted_folder.get_descendants(include_self=True)
-        allowed_ids = [f.id for f in allowed_folders]
-        if not file_obj.folder or file_obj.folder.id not in allowed_ids:
-            return "Error: Access denied. File is outside sandboxed scope."
-
-    try:
-        content = file_obj.file.read().decode("utf-8")
-        file_obj.file.seek(0)
-        return content
-    except UnicodeDecodeError:
-        return "[Binary file - cannot display content as text]"
-
-
-def execute_write_document(agent_token: AgentToken, name: str, content: str, folder_id: str | None = None) -> str:
-    user = agent_token.user
-    from django.core.files.base import ContentFile
-
-    if agent_token.restricted_folder:
-        allowed_folders = agent_token.restricted_folder.get_descendants(include_self=True)
-        allowed_ids = [f.id for f in allowed_folders]
-
-        if folder_id:
-            try:
-                target_uuid = UUID(folder_id)
-            except ValueError:
-                return "Error: Invalid folder UUID format."
-            if target_uuid not in allowed_ids:
-                return "Error: Access denied. Folder is outside sandboxed scope."
-            target_folder = Folder.objects.get(id=target_uuid)
-        else:
-            target_folder = agent_token.restricted_folder
-    else:
-        if folder_id:
-            try:
-                target_uuid = UUID(folder_id)
-            except ValueError:
-                return "Error: Invalid folder UUID format."
-            try:
-                target_folder = Folder.objects.get(id=target_uuid, owner=user)
-            except Folder.DoesNotExist:
-                return "Error: Folder not found or access denied."
-        else:
-            target_folder = None
-
-    existing_file = FileModel.objects.filter(
-        owner=user,
-        name=name,
-        folder=target_folder
-    ).first()
-
-    new_content_bytes = content.encode("utf-8")
-
-    if existing_file:
-        if existing_file.locked_by and existing_file.locked_by != user:
-            return f"Error: File is locked by {existing_file.locked_by.email}."
-
-        old_content = existing_file.file.read()
-        existing_file.file.seek(0)
-
-        version_number = existing_file.versions.count() + 1
-        diff_str = compute_diff(old_content, new_content_bytes)
-
-        FileVersion.objects.create(
-            file=existing_file,
-            version_number=version_number,
-            file_instance=ContentFile(old_content, name=f"v{version_number}_{existing_file.name}"),
-            diff_content=diff_str,
-            created_by=user
-        )
-
-        existing_file.file.save(name, ContentFile(new_content_bytes), save=False)
-        existing_file.save()
-        return f"File '{name}' overwritten successfully. Created version {version_number}."
-
-    FileModel.objects.create(
-        owner=user,
-        name=name,
-        file=ContentFile(new_content_bytes, name=name),
-        folder=target_folder
-    )
-    return f"File '{name}' created successfully."
-
-
-def execute_search_documents(agent_token: AgentToken, query: str) -> str:
-    user = agent_token.user
-
-    files_qs = FileModel.objects.filter(owner=user).select_related("folder")
-    folders_qs = Folder.objects.filter(owner=user)
-
-    if agent_token.restricted_folder:
-        allowed_folders = agent_token.restricted_folder.get_descendants(include_self=True)
-        allowed_ids = [f.id for f in allowed_folders]
-        files_qs = files_qs.filter(folder_id__in=allowed_ids)
-        folders_qs = folders_qs.filter(id__in=allowed_ids)
-
-    matched_files = files_qs.filter(name__icontains=query)
-    matched_folders = folders_qs.filter(name__icontains=query)
-
-    output = [f"Search results for: '{query}'", "Matched folders:"]
-    for f in matched_folders:
-        output.append(f" - [Folder] name: {f.name}, id: {f.id}")
-    if not matched_folders.exists():
-        output.append(" (None)")
-
-    output.append("Matched files:")
-    for f in matched_files:
-        output.append(f" - [File] name: {f.name}, id: {f.id}")
-
-    content_matches = []
-    for file_obj in files_qs:
-        if file_obj in matched_files:
-            continue
-        try:
-            content = file_obj.file.read()
-            file_obj.file.seek(0)
-            text = content.decode("utf-8")
-            if query.lower() in text.lower():
-                content_matches.append(file_obj)
-        except Exception:
-            pass
-
-    if content_matches:
-        output.append("Matched file contents:")
-        for f in content_matches:
-            output.append(f" - [File Content Match] name: {f.name}, id: {f.id}")
-
-    if not matched_files.exists() and not content_matches:
-        output.append(" (None)")
-
-    return "\n".join(output)
-
-
-# --- MCP Server Factory ---
-
-def create_server_for_token(agent_token: AgentToken) -> Server:
-    server = Server("lore-mcp-server")
-
-    @server.list_tools()
-    async def handle_list_tools() -> list[types.Tool]:
-        return [
-            types.Tool(
-                name="list_directory",
-                description="List files and subfolders inside a target directory.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "folder_id": {"type": "string", "description": "Optional UUID of the folder."}
-                    }
-                }
-            ),
-            types.Tool(
-                name="read_document",
-                description="Retrieve text contents of a file.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "file_id": {"type": "string", "description": "The UUID of the file."}
-                    },
-                    "required": ["file_id"]
-                }
-            ),
-            types.Tool(
-                name="write_document",
-                description="Write or overwrite a document. Automatically creates new file versions and unified text diffs on overwrite.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "name": {"type": "string", "description": "The name of the file (e.g. config.txt)."},
-                        "content": {"type": "string", "description": "The text content of the file."},
-                        "folder_id": {"type": "string", "description": "Optional UUID of the parent folder."}
-                    },
-                    "required": ["name", "content"]
-                }
-            ),
-            types.Tool(
-                name="search_documents",
-                description="Search documents inside the vault by name or content text.",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string", "description": "The search term."}
-                    },
-                    "required": ["query"]
-                }
-            )
-        ]
-
-    @server.call_tool()
-    async def handle_call_tool(
-        name: str,
-        arguments: dict | None
-    ) -> list[types.TextContent]:
-        if agent_token.scope == "read_only" and name in ("write_document",):
-            return [types.TextContent(
-                type="text",
-                text="Error: Token scope 'read_only' does not permit this operation."
-            )]
-
-        try:
-            if name == "list_directory":
-                folder_id = (arguments or {}).get("folder_id")
-                result = await sync_to_async(execute_list_directory)(agent_token, folder_id)
-                return [types.TextContent(type="text", text=result)]
-            elif name == "read_document":
-                file_id = (arguments or {}).get("file_id")
-                result = await sync_to_async(execute_read_document)(agent_token, file_id)
-                return [types.TextContent(type="text", text=result)]
-            elif name == "write_document":
-                file_name = (arguments or {}).get("name")
-                content = (arguments or {}).get("content")
-                folder_id = (arguments or {}).get("folder_id")
-                result = await sync_to_async(execute_write_document)(agent_token, file_name, content, folder_id)
-                return [types.TextContent(type="text", text=result)]
-            elif name == "search_documents":
-                query = (arguments or {}).get("query")
-                result = await sync_to_async(execute_search_documents)(agent_token, query)
-                return [types.TextContent(type="text", text=result)]
-            else:
-                return [types.TextContent(type="text", text=f"Error: Unknown tool '{name}'")]
-        except Exception as e:
-            return [types.TextContent(type="text", text=f"Error executing tool: {str(e)}")]
-
-    return server
-
-
-# --- Transport Runners ---
-
-async def run_stdio(token_str: str):
-    agent_token = await sync_to_async(authenticate_token)(token_str)
-    if not agent_token:
-        print(f"Error: Invalid or expired token '{token_str}'", file=sys.stderr)
-        sys.exit(1)
-
-    from mcp.server.stdio import stdio_server
-    server = create_server_for_token(agent_token)
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options()
-        )
-
-
-def run_sse(host: str, port: int):
-    import uvicorn
-    from mcp.server.sse import SseServerTransport
-    from starlette.applications import Starlette
-    from starlette.responses import JSONResponse
-    from starlette.routing import Mount, Route
-
-    sse = SseServerTransport("/messages")
-
-    async def handle_sse(request):
-        token = request.query_params.get("token") or request.headers.get("Authorization")
-        if token and token.startswith("Bearer "):
-            token = token[7:]
-
-        agent_token = await sync_to_async(authenticate_token)(token)
+    if active_token:
+        # Check if prefixed token
+        if active_token.startswith("lore_agt_"):
+            parts = active_token.split("_")
+            if len(parts) >= 4:
+                lookup_id = parts[2]
+                agent_token = AgentToken.objects.select_related("user", "principal").filter(lookup_id=lookup_id).first()
+        
         if not agent_token:
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            import hashlib
+            th = hashlib.sha256(active_token.encode("utf-8")).hexdigest()
+            agent_token = AgentToken.objects.select_related("user", "principal").filter(token_hash=th).first()
 
-        async with sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as (read_stream, write_stream):
-            server = create_server_for_token(agent_token)
-            await server.run(
-                read_stream,
-                write_stream,
-                server.create_initialization_options()
+        if agent_token and agent_token.verify_secret(active_token):
+            return SimpleNamespace(
+                user=agent_token.user,
+                principal=agent_token.principal,
+                agent_token=agent_token,
             )
 
-    routes = [
-        Route("/sse", endpoint=handle_sse, methods=["GET"]),
-        Mount("/messages", app=sse.handle_post_message),
-    ]
+    # Fallback to first active admin principal in workspace
+    admin_user = User.objects.filter(is_workspace_admin=True).first() or User.objects.first()
+    principal = getattr(admin_user, "principal", None) if admin_user else None
 
-    app = Starlette(routes=routes)
-    uvicorn.run(app, host=host, port=port)
+    return SimpleNamespace(
+        user=admin_user,
+        principal=principal,
+        agent_token=None,
+    )
 
 
-# --- Main CLI Entrypoint ---
+@mcp.tool()
+def search_artifacts(query: str = "", limit: int = 5, collection_id: Optional[str] = None) -> list[dict[str, Any]]:
+    """Search for artifacts by title or text content across accessible collections."""
+    req = get_authenticated_request_context()
+    return mcp_search_artifacts(req, query=query, limit=limit, collection_id=collection_id)
+
+
+@mcp.tool()
+def search_artifacts_semantic(query: str, limit: int = 5) -> list[dict[str, Any]]:
+    """Perform semantic RAG retrieval across granular text chunks and return matching knowledge context."""
+    req = get_authenticated_request_context()
+    return mcp_search_artifacts_semantic(req, query=query, limit=limit)
+
+
+@mcp.tool()
+def read_artifact(artifact_id: str) -> dict[str, Any]:
+    """Retrieve full artifact metadata, current version, and text content by ID."""
+    req = get_authenticated_request_context()
+    return mcp_read_artifact(req, artifact_id=artifact_id)
+
+
+@mcp.tool()
+def update_artifact_draft(artifact_id: str, operations: list[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Apply mutation operations to an artifact's working draft (collaborative ADM editing).
+    Operations can include insert_block, replace_block, move_block, delete_block.
+    """
+    req = get_authenticated_request_context()
+    return mcp_update_artifact_draft(req, artifact_id=artifact_id, operations=operations)
+
+
+@mcp.tool()
+def commit_artifact_version(artifact_id: str, commit_message: str = "") -> dict[str, Any]:
+    """Commit the active working draft into an immutable, permanent artifact version snapshot."""
+    req = get_authenticated_request_context()
+    return mcp_commit_artifact_version(req, artifact_id=artifact_id, commit_message=commit_message)
+
+
+@mcp.tool()
+def write_artifact(
+    title: str,
+    type: str,
+    content: str,
+    collection_id: Optional[str] = None,
+    expected_version_number: Optional[int] = None,
+) -> dict[str, Any]:
+    """
+    Create or update an artifact, automatically generating version diffs and wiki-link references.
+    Type can be: 'skill', 'decision', 'memory', 'document'.
+    """
+    req = get_authenticated_request_context()
+    return mcp_write_artifact(
+        req,
+        title=title,
+        type=type,
+        content=content,
+        collection_id=collection_id,
+        expected_version_number=expected_version_number,
+    )
+
+
+@mcp.tool()
+def delete_artifact(artifact_id: str) -> dict[str, Any]:
+    """Soft-delete an artifact by setting its deleted_at timestamp."""
+    req = get_authenticated_request_context()
+    return mcp_delete_artifact(req, artifact_id=artifact_id)
+
+
+@mcp.tool()
+def revert_artifact(artifact_id: str, target_version_number: int, commit_message: str = "") -> dict[str, Any]:
+    """Revert an artifact to a previous version number, creating an append-only snapshot."""
+    req = get_authenticated_request_context()
+    return mcp_revert_artifact(
+        req,
+        artifact_id=artifact_id,
+        target_version_number=target_version_number,
+        commit_message=commit_message,
+    )
+
+
+@mcp.tool()
+def list_collection(collection_id: Optional[str] = None) -> dict[str, Any]:
+    """List sub-collections and contained artifacts inside a collection."""
+    req = get_authenticated_request_context()
+    return mcp_list_collection(req, collection_id=collection_id)
+
+
+@mcp.tool()
+def create_collection(name: str, parent_id: Optional[str] = None, description: str = "") -> dict[str, Any]:
+    """Create a new collection for organizing artifacts."""
+    req = get_authenticated_request_context()
+    return mcp_create_collection(req, name=name, parent_id=parent_id, description=description)
+
+
+@mcp.tool()
+def create_relationship(from_artifact_id: str, to_artifact_id: str, relation_type: str = "references") -> dict[str, Any]:
+    """Create a directed relationship edge between two artifacts in the knowledge graph."""
+    req = get_authenticated_request_context()
+    return mcp_create_relationship(
+        req,
+        from_artifact_id=from_artifact_id,
+        to_artifact_id=to_artifact_id,
+        relation_type=relation_type,
+    )
+
+
+@mcp.tool()
+def get_related_artifacts(artifact_id: str) -> dict[str, Any]:
+    """Retrieve incoming and outgoing relationship edges for an artifact."""
+    req = get_authenticated_request_context()
+    return mcp_get_related_artifacts(req, artifact_id=artifact_id)
+
+
+@mcp.tool()
+def list_skills() -> list[dict[str, Any]]:
+    """List all registered skills and prompt templates available in Lore."""
+    req = get_authenticated_request_context()
+    return mcp_list_skills(req)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Lore Model Context Protocol (MCP) Server")
-    parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="Transport mechanism")
-    parser.add_argument("--host", default="127.0.0.1", help="SSE host address")
-    parser.add_argument("--port", type=int, default=8001, help="SSE port number")
-    parser.add_argument("--token", help="Plaintext agent token for authentication (required for stdio)")
+    parser = argparse.ArgumentParser(description="Lore Artifact Plane FastMCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport protocol (stdio or sse)",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Host for SSE transport")
+    parser.add_argument("--port", type=int, default=8001, help="Port for SSE transport")
+    parser.add_argument("--token", default=None, help="Agent token for authentication")
 
     args = parser.parse_args()
+    if args.token:
+        _global_token_str = args.token
 
-    if args.transport == "stdio":
-        if not args.token:
-            print("Error: --token is required when running in stdio transport mode.", file=sys.stderr)
-            sys.exit(1)
-        asyncio.run(run_stdio(args.token))
-    elif args.transport == "sse":
-        run_sse(args.host, args.port)
+    if args.transport == "sse":
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        mcp.run(transport="stdio")

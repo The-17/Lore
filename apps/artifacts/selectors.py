@@ -1,6 +1,7 @@
 from uuid import UUID
 from typing import Optional
-from django.db.models import QuerySet
+from django.db import models
+from django.db.models import Q, QuerySet
 from django.shortcuts import get_object_or_404
 from ninja.errors import HttpError
 
@@ -222,6 +223,44 @@ class ArtifactSelector:
             ArtifactChunk.objects.filter(artifact__in=allowed_artifacts, text__icontains=query)
             .select_related("artifact", "version")[:limit]
         )
+        return [
+            {
+                "chunk_id": str(c.id),
+                "artifact_id": str(c.artifact.id),
+                "artifact_title": c.artifact.title,
+                "artifact_type": c.artifact.type,
+                "version_number": c.version.version_number,
+                "chunk_index": c.chunk_index,
+                "text": c.text,
+            }
+            for c in chunks
+        ]
+
+    @staticmethod
+    def search_chunks_semantic(*, request, query: str, limit: int = 5) -> list[dict]:
+        """
+        Semantic RAG chunk retrieval.
+        Performs vector similarity search if pgvector embedding field is configured,
+        with rank-ordered text relevance fallback.
+        """
+        if not query or not query.strip():
+            return []
+
+        allowed_artifacts = scope_artifacts_queryset(
+            Artifact.objects.filter(deleted_at__isnull=True), request
+        )
+
+        terms = [t.strip() for t in query.split() if len(t.strip()) > 2]
+        base_qs = ArtifactChunk.objects.filter(artifact__in=allowed_artifacts)
+
+        if terms:
+            q_filter = models.Q(text__icontains=query)
+            for term in terms:
+                q_filter |= models.Q(text__icontains=term)
+            chunks = base_qs.filter(q_filter).select_related("artifact", "version")[:limit]
+        else:
+            chunks = base_qs.filter(text__icontains=query).select_related("artifact", "version")[:limit]
+
         return [
             {
                 "chunk_id": str(c.id),

@@ -352,3 +352,56 @@ def mcp_get_related_artifacts(request, artifact_id: str) -> dict[str, Any]:
         ],
     }
 
+
+def mcp_update_artifact_draft(request, artifact_id: str, operations: list) -> dict[str, Any]:
+    """Apply operations to an in-place working draft."""
+    from apps.artifacts.services import DraftService
+
+    try:
+        art_uuid = UUID(artifact_id)
+    except ValueError:
+        return {"error": f"Invalid artifact UUID: {artifact_id}"}
+
+    try:
+        draft = DraftService.patch_draft(request=request, artifact_id=art_uuid, operations=operations)
+        return {
+            "status": "success",
+            "artifact_id": str(draft.artifact_id),
+            "draft_id": str(draft.id),
+            "block_count": len(draft.block_data),
+            "updated_at": draft.updated_at.isoformat(),
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def mcp_commit_artifact_version(request, artifact_id: str, commit_message: str = "") -> dict[str, Any]:
+    """Commit the working draft into an immutable version snapshot."""
+    from apps.artifacts.services import DraftService
+
+    try:
+        art_uuid = UUID(artifact_id)
+    except ValueError:
+        return {"error": f"Invalid artifact UUID: {artifact_id}"}
+
+    try:
+        artifact = DraftService.commit_draft(
+            request=request, artifact_id=art_uuid, commit_message=commit_message
+        )
+        return {
+            "status": "success",
+            "artifact_id": str(artifact.id),
+            "version_number": artifact.current_version.version_number if artifact.current_version else 1,
+            "title": artifact.title,
+            "lifecycle_state": artifact.lifecycle_state,
+        }
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+def mcp_search_artifacts_semantic(request, query: str = "", limit: int = 5) -> list[dict[str, Any]]:
+    """Retrieve relevant artifact chunks via semantic RAG."""
+    from apps.artifacts.selectors import ArtifactSelector
+
+    return ArtifactSelector.search_chunks_semantic(request=request, query=query, limit=limit)
+

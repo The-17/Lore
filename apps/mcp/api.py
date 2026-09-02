@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional
 from ninja import Router, Schema
 
 from apps.mcp.tools import (
+    mcp_commit_artifact_version,
     mcp_create_collection,
     mcp_create_relationship,
     mcp_delete_artifact,
@@ -11,6 +12,8 @@ from apps.mcp.tools import (
     mcp_read_artifact,
     mcp_revert_artifact,
     mcp_search_artifacts,
+    mcp_search_artifacts_semantic,
+    mcp_update_artifact_draft,
     mcp_write_artifact,
 )
 
@@ -126,8 +129,57 @@ MCP_TOOLS_SPEC = [
     },
     {
         "name": "list_skills",
-        "description": "List all registered skill artifacts accessible to the agent.",
+        "description": "List all shared reusable skills and system capabilities registered in Lore.",
         "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "update_artifact_draft",
+        "description": "Apply typed mutation operations to an artifact's working draft (collaborative ADM editing).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {"type": "string"},
+                            "block_id": {"type": "string"},
+                            "block_type": {"type": "string"},
+                            "content": {},
+                            "attrs": {"type": "object"},
+                        },
+                        "required": ["op"],
+                    },
+                },
+            },
+            "required": ["artifact_id", "operations"],
+        },
+    },
+    {
+        "name": "commit_artifact_version",
+        "description": "Commit an active working draft into an immutable, permanent artifact version snapshot.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "commit_message": {"type": "string"},
+            },
+            "required": ["artifact_id"],
+        },
+    },
+    {
+        "name": "search_artifacts_semantic",
+        "description": "Perform semantic RAG retrieval across granular text chunks and return matching knowledge context.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+            },
+            "required": ["query"],
+        },
     },
 ]
 
@@ -179,6 +231,12 @@ def handle_mcp_jsonrpc(request, payload: MCPPayloadSchema):
                 result = mcp_get_related_artifacts(request, **arguments)
             elif name == "list_skills":
                 result = mcp_list_skills(request)
+            elif name == "update_artifact_draft":
+                result = mcp_update_artifact_draft(request, **arguments)
+            elif name == "commit_artifact_version":
+                result = mcp_commit_artifact_version(request, **arguments)
+            elif name == "search_artifacts_semantic":
+                result = mcp_search_artifacts_semantic(request, **arguments)
             else:
                 return {
                     "jsonrpc": "2.0",
