@@ -180,6 +180,27 @@ class RelationshipResponseSchema(BaseModel):
         )
 
 
+class GraphNodeSchema(BaseModel):
+    id: UUID
+    title: str
+    type: str
+    lifecycle_state: str
+    collection_id: Optional[UUID] = None
+
+
+class GraphEdgeSchema(BaseModel):
+    id: UUID
+    source_id: UUID
+    target_id: UUID
+    relation_type: str
+    created_at: datetime
+
+
+class GraphResponseSchema(BaseModel):
+    nodes: list[GraphNodeSchema]
+    edges: list[GraphEdgeSchema]
+
+
 class CommentResponseSchema(BaseModel):
     id: UUID
     artifact_id: UUID

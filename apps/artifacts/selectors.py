@@ -148,6 +148,52 @@ class ArtifactSelector:
         return artifact.versions.select_related("created_by").order_by("-version_number")
 
     @staticmethod
+    def get_graph(*, request, collection_id: Optional[UUID] = None) -> dict:
+        """
+        Retrieves the complete directed knowledge graph for artifacts
+        scoped to the caller's workspace permissions.
+        """
+        qs = Artifact.objects.filter(deleted_at__isnull=True)
+        if collection_id:
+            qs = qs.filter(collection_id=collection_id)
+        qs = scope_artifacts_queryset(qs, request)
+
+        artifact_rows = list(qs.values("id", "title", "type", "lifecycle_state", "collection_id"))
+        artifact_ids = {a["id"] for a in artifact_rows}
+
+        if not artifact_ids:
+            return {"nodes": [], "edges": []}
+
+        relationships = ArtifactRelationship.objects.filter(
+            from_artifact_id__in=artifact_ids,
+            to_artifact_id__in=artifact_ids,
+        ).values("id", "from_artifact_id", "to_artifact_id", "relation_type", "created_at")
+
+        nodes = [
+            {
+                "id": a["id"],
+                "title": a["title"],
+                "type": a["type"],
+                "lifecycle_state": a["lifecycle_state"],
+                "collection_id": a["collection_id"],
+            }
+            for a in artifact_rows
+        ]
+
+        edges = [
+            {
+                "id": r["id"],
+                "source_id": r["from_artifact_id"],
+                "target_id": r["to_artifact_id"],
+                "relation_type": r["relation_type"],
+                "created_at": r["created_at"],
+            }
+            for r in relationships
+        ]
+
+        return {"nodes": nodes, "edges": edges}
+
+    @staticmethod
     def get_relationships(*, request, artifact_id: UUID) -> dict:
         artifact = ArtifactSelector.get_by_id_for_request(request=request, artifact_id=artifact_id)
         outgoing = (

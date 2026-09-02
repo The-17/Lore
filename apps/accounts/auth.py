@@ -40,7 +40,19 @@ class LoreAuth(HttpBearer):
     - Tokens starting with 'lore_agt_' or 'lore_agent_' authenticate as AgentToken
       via indexed lookup and constant-time HMAC hash comparison.
     - Other tokens authenticate as human user JWT access tokens.
+    - Supports query parameter 'token' as fallback for SSE / EventSource connections.
     """
+
+    def __call__(self, request):
+        res = super().__call__(request)
+        if res is not None:
+            return res
+
+        query_token = request.GET.get("token")
+        if query_token:
+            return self.authenticate(request, query_token)
+
+        return None
 
     def authenticate(self, request, token: str) -> Any | None:
         if not token:

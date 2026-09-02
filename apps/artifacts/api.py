@@ -18,6 +18,7 @@ from .schemas import (
     ArtifactVersionResponseSchema,
     CommentResponseSchema,
     DraftPatchSchema,
+    GraphResponseSchema,
     RelationshipCreateSchema,
     RelationshipResponseSchema,
 )
@@ -143,6 +144,12 @@ def fetch_skill(request, title: str):
 def search_chunks(request, query: str = "", limit: int = 10):
     """Search granular text chunks for RAG queries."""
     return ArtifactSelector.search_chunks(request=request, query=query, limit=limit)
+
+
+@router.get("/graph", response=GraphResponseSchema)
+def get_graph(request, collection_id: UUID | None = None):
+    """Retrieve complete directed knowledge graph topology (nodes + edges)."""
+    return ArtifactSelector.get_graph(request=request, collection_id=collection_id)
 
 
 @router.get("/{artifact_id}", response={200: ArtifactResponseSchema, 404: dict})
